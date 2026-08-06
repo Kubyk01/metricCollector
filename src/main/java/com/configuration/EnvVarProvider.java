@@ -11,6 +11,10 @@ public final class EnvVarProvider {
 
     private static final Properties properties = loadProperties();
 
+    public static String getEnvironment() {
+        return env;
+    }
+
     private static Properties loadProperties() {
         Properties properties = new Properties();
         try (InputStream input = EnvVarProvider.class.getClassLoader()
@@ -27,4 +31,37 @@ public final class EnvVarProvider {
         return properties;
     }
 
+    public static String getBaseUrl() {
+        VarEnvironments environment = VarEnvironments.parse(env);
+        String propertyKey = String.format("base.url.%s", environment.name().toLowerCase());
+        String baseUrl = properties.getProperty(propertyKey);
+
+        if (baseUrl == null) {
+            throw new MisconfigurationException("Missing base URL configuration for environment: '" + env + "' in properties file");
+        }
+        return baseUrl;
+    }
+
+    public static String getToken() {
+        VarEnvironments environment = VarEnvironments.parse(env);
+        String propertyKey = String.format("token.url.%s", environment.name().toLowerCase());
+        String tokenUrl = properties.getProperty(propertyKey);
+
+        if (tokenUrl == null) {
+            throw new MisconfigurationException("Missing token configuration for environment: '" + env + "' in properties file");
+        }
+        return tokenUrl;
+    }
+
+    public static String getMetricsConfigLocation() {
+        VarEnvironments environment = VarEnvironments.parse(env);
+        String propertyKey = String.format("metrics-config-location.%s", environment.name().toLowerCase());
+        String location = properties.getProperty(propertyKey);
+
+        if (location == null) {
+            throw new MisconfigurationException("Missing metrics config location for environment: '" + env + "' in properties file");
+        }
+
+        return location;
+    }
 }

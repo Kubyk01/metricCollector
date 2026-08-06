@@ -17,6 +17,9 @@ public enum ErrorPolicy {
     SINGLE_METRIC_TOO_LARGE(false, "single-metric-too-large"),
     DEFAULT_ERROR(true, "mcl-error");
 
+    // GRPC ERRORS
+
+
     private final boolean retryable;
     private final String fileName;
 

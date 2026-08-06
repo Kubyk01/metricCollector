@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package com.example.metrichub.adapter.driving.grpc;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+option java_multiple_files = true;
+option java_package = "com.example.metrichub.adapter.driving.grpc";
+option java_outer_classname = "MetricServiceProto";
+
+service MetricService {
+  rpc ingestMetric (MetricRequest) returns (google.protobuf.Empty);
+
+  rpc getMetricIdsByName (GetMetricIdsByNameRequest) returns (GetMetricIdsByNameResponse);
+}
+
+message MetricRequest {
+  repeated MetricDTO metric = 1;
+}
+
+message MetricDTO {
+  optional string parent_metric_id = 1;
+  string name = 2;
+  string description = 3;
+  string unit = 4;
+  string origin = 5;
+  repeated string tags = 6;
+  ProtoMetricType type = 7;
+  repeated MetricComponentDTO components = 8;
+}
+
+message MetricComponentDTO {
+  string name = 1;
+  repeated string tags = 2;
+  string key = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  string value = 5;
+  optional int64 evaluation_order = 6;
+  ProtoMetricComponentOperationType operation = 7;
+  optional string groupAggregationMethod = 8;
+}
+
+enum ProtoMetricType {
+  NUMERICAL = 0;
+  BOOLEAN = 1;
+  STATE = 2;
+}
+
+enum ProtoMetricComponentOperationType {
+  NUMERICAL_ADD = 0;
+  NUMERICAL_SUBTRACT = 1;
+  NUMERICAL_MULTIPLY = 2;
+  NUMERICAL_DIVIDE = 3;
+  NUMERICAL_AVERAGE = 4;
+  BOOLEAN_AND = 5;
+  BOOLEAN_OR = 6;
+  STATE_ALLOW = 7;
+  STATE_FORBID = 8;
+  DERIVED_AGGREGATION_RESULT = 9;
+  DERIVED_THRESHOLD_STATUS = 10;
+}
+
+message GetMetricIdsByNameRequest {
+  repeated string names = 1;
+}
+
+message GetMetricIdsByNameResponse {
+  map<string, string> metric_ids = 1;
+}

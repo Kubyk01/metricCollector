@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package com.example.metrichub.adapter.driving.grpc;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "metric.proto";
+
+option java_multiple_files = true;
+option java_package = "com.example.metrichub.adapter.driving.grpc";
+option java_outer_classname = "MetricComponentProto";
+
+service MetricComponentService {
+  rpc AddMetricComponents(AddMetricComponentsRequest) returns (google.protobuf.Empty);
+
+  rpc AddComponentValues(AddComponentValuesRequest) returns (google.protobuf.Empty);
+}
+
+message AddMetricComponentsRequest {
+  string metric_id = 1;
+  repeated MetricComponentDTO components = 2;
+}
+
+message AddComponentValuesRequest {
+  string metric_id = 1;
+  ComponentStubDTO component_stub = 2;
+}
+
+message ComponentStubDTO {
+  string component_name = 1;
+  repeated string tags = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  string key = 4;
+  optional string value = 5;
+}
+

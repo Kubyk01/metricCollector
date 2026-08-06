@@ -1,0 +1,22 @@
+{
+  "metrics": [
+    {
+      "name": "active-tasks",
+      "unit": "task",
+      "origin": "origin",
+      "type": "NUMERICAL",
+      "components": [
+        {
+          "name": "active-tasks-daily-count",
+          "operation": "NUMERICAL_ADD",
+          "timestamp": "dynamic.timestamp",
+          "key": "dynamic.key",
+          "_comment": "in trigger you can pass functions or fields of class, like com.example.Class.value",
+          "trigger": "com.example.Class.trigger()",
+          "operation_trigger": "increase",
+          "value": "com.example.Class.value"
+        }
+      ]
+    }
+  ]
+}
