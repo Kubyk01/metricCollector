@@ -64,4 +64,12 @@ public final class EnvVarProvider {
 
         return location;
     }
+
+    public static String getProtocol() {
+        String protocol = properties.getProperty("protocol");
+        if (protocol == null) {
+            return "grpc";
+        }
+        return protocol.trim().toLowerCase();
+    }
 }

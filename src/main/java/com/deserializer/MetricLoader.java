@@ -26,7 +26,7 @@ public class MetricLoader {
 
         List<String> allMetricNames = new ArrayList<>(metricsNodesByName.keySet());
 
-
+        return Mono.empty();
     }
 
 }

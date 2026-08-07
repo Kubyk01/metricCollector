@@ -1,22 +1,26 @@
 package com.adapter.secondary.httpmetricingestion;
 
+import com.client.CollectorsClient;
 import com.model.Metric;
 import com.port.secondary.MetricIngestionPort;
-import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
 
-public class MetricIngestion implements MetricIngestionPort, Disposable {
+public class HTTPMetricIngestion implements MetricIngestionPort, reactor.core.Disposable {
+
+    private final CollectorsClient client = new CollectorsClient();
 
     @Override
     public Mono<Void> submitMetric(Metric metric) {
-        return null;
+        // TODO: use client for HTTP POST
+        return Mono.empty();
     }
 
     @Override
     public Mono<Void> sendMetricsImmediately(List<Metric> metrics) {
-        return null;
+        // TODO: TODO: use client for batch
+        return Mono.empty();
     }
 
     @Override
@@ -26,6 +30,6 @@ public class MetricIngestion implements MetricIngestionPort, Disposable {
 
     @Override
     public boolean isDisposed() {
-        return Disposable.super.isDisposed();
+        return false;
     }
 }
