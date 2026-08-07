@@ -1,5 +1,9 @@
 package com.adapter.secondary.grpcmetricingestion;
 
+import com.example.metrichub.adapter.driving.grpc.MetricDTO;
+import com.example.metrichub.adapter.driving.grpc.MetricRequest;
+import com.example.metrichub.adapter.driving.grpc.ProtoMetricType;
+import com.example.metrichub.adapter.driving.grpc.ReactorMetricServiceGrpc;
 import com.model.Metric;
 import com.model.MetricComponent;
 import com.port.secondary.MetricIngestionPort;
@@ -13,51 +17,46 @@ import java.util.stream.Collectors;
 public class GRPCMetricIngestion implements MetricIngestionPort, reactor.core.Disposable {
 
     private final ManagedChannel channel;
-    private final MetricServiceGrpc.MetricServiceStub stub;
-    private final MetricServiceGrpc.MetricServiceBlockingStub blockingStub;
+    private final ReactorMetricServiceGrpc.ReactorMetricServiceStub reactorStub;
 
     public GRPCMetricIngestion() {
         String baseUrl = com.configuration.EnvVarProvider.getBaseUrl();
         String target = baseUrl.replaceFirst("^https?://", "");
         this.channel = ManagedChannelBuilder.forTarget(target)
-                .usePlaintext()
-                .build();
-        this.stub = MetricServiceGrpc.newStub(channel);
-        this.blockingStub = MetricServiceGrpc.newBlockingStub(channel);
+            // todo make in env ability to use plaintext or TLS/SSL
+            .usePlaintext()
+            .build();
+        this.reactorStub = ReactorMetricServiceGrpc.newReactorStub(channel);
     }
 
     @Override
     public Mono<Void> submitMetric(Metric metric) {
-        return Mono.fromRunnable(() -> {
-            MetricRequest request = buildRequest(metric);
-            blockingStub.ingestMetric(request);
-        });
+        MetricRequest request = buildRequest(metric);
+        return reactorStub.ingestMetric(request).then();
     }
 
     @Override
     public Mono<Void> sendMetricsImmediately(List<Metric> metrics) {
-        return Mono.fromRunnable(() -> {
-            MetricRequest request = MetricRequest.newBuilder()
-                    .addAllMetric(metrics.stream()
-                            .map(this::toProto)
-                            .collect(Collectors.toList()))
-                    .build();
-            blockingStub.ingestMetric(request);
-        });
+        MetricRequest request = MetricRequest.newBuilder()
+            .addAllMetric(metrics.stream()
+                .map(this::toProto)
+                .collect(Collectors.toList()))
+            .build();
+        return reactorStub.ingestMetric(request).then();
     }
 
     private MetricRequest buildRequest(Metric metric) {
         return MetricRequest.newBuilder()
-                .addMetric(toProto(metric))
-                .build();
+            .addMetric(toProto(metric))
+            .build();
     }
 
     private MetricDTO toProto(Metric metric) {
         MetricDTO.Builder builder = MetricDTO.newBuilder()
-                .setName(metric.getName())
-                .setUnit(metric.getUnit())
-                .setOrigin(metric.getOrigin())
-                .setType(protoType(metric.getType()));
+            .setName(metric.getName())
+            .setUnit(metric.getUnit())
+            .setOrigin(metric.getOrigin())
+            .setType(protoType(metric.getType()));
         if (metric.getDescription() != null) {
             builder.setDescription(metric.getDescription());
         }
@@ -66,21 +65,21 @@ public class GRPCMetricIngestion implements MetricIngestionPort, reactor.core.Di
         }
         if (metric.getComponents() != null) {
             builder.addAllComponents(metric.getComponents().stream()
-                    .map(this::toProtoComponent)
-                    .collect(Collectors.toList()));
+                .map(this::toProtoComponent)
+                .collect(Collectors.toList()));
         }
         return builder.build();
     }
 
     private com.example.metrichub.adapter.driving.grpc.MetricComponentDTO toProtoComponent(MetricComponent comp) {
         com.example.metrichub.adapter.driving.grpc.MetricComponentDTO.Builder builder =
-                com.example.metrichub.adapter.driving.grpc.MetricComponentDTO.newBuilder()
-                        .setName(comp.getName())
-                        .setKey(comp.getKey() != null ? comp.getKey() : "")
-                        .setTimestamp(com.google.protobuf.Timestamp.newBuilder()
-                                .setSeconds(comp.getTimestamp().toEpochSecond())
-                                .setNanos(comp.getTimestamp().getNano()))
-                        .setValue(comp.getValue() != null ? comp.getValue() : "");
+            com.example.metrichub.adapter.driving.grpc.MetricComponentDTO.newBuilder()
+                .setName(comp.getName())
+                .setKey(comp.getKey() != null ? comp.getKey() : "")
+                .setTimestamp(com.google.protobuf.Timestamp.newBuilder()
+                    .setSeconds(comp.getTimestamp().toEpochSecond())
+                    .setNanos(comp.getTimestamp().getNano()))
+                .setValue(comp.getValue() != null ? comp.getValue() : "");
         if (comp.getTags() != null) {
             builder.addAllTags(comp.getTags());
         }

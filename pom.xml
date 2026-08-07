@@ -89,7 +89,7 @@
       <scope>provided</scope>
     </dependency>
 
-    <!-- Javassist для модификации байткода -->
+    <!-- Javassist  -->
     <dependency>
       <groupId>org.javassist</groupId>
       <artifactId>javassist</artifactId>
@@ -116,7 +116,7 @@
       <scope>provided</scope>
     </dependency>
 
-    <!-- Тестовые зависимости -->
+    <!-- test dependency -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
@@ -144,7 +144,7 @@
   </dependencies>
 
   <build>
-    <!-- Ос-детектор для protobuf -->
+    <!-- os detector -->
     <extensions>
       <extension>
         <groupId>kr.motd.maven</groupId>
@@ -154,7 +154,7 @@
     </extensions>
 
     <plugins>
-      <!-- Компилятор -->
+      <!-- compiler -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
@@ -162,11 +162,10 @@
         <configuration>
           <source>${java.version}</source>
           <target>${java.version}</target>
-          <release>${java.version}</release>
         </configuration>
       </plugin>
 
-      <!-- Плагин для генерации дескриптора плагина -->
+      <!-- descriptor  -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-plugin-plugin</artifactId>
@@ -181,7 +180,7 @@
         </executions>
       </plugin>
 
-      <!-- Source и JAR (стандартные) -->
+      <!-- Source and JAR -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>
@@ -214,8 +213,10 @@
         <artifactId>protobuf-maven-plugin</artifactId>
         <version>0.6.1</version>
         <configuration>
+          <!--suppress UnresolvedMavenProperty -->
           <protocArtifact>com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
           <pluginId>grpc-java</pluginId>
+          <!--suppress UnresolvedMavenProperty -->
           <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}</pluginArtifact>
           <protocPlugins>
             <protocPlugin>
