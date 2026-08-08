@@ -72,4 +72,9 @@ public final class EnvVarProvider {
         }
         return protocol.trim().toLowerCase();
     }
+
+    public static boolean isScanAllClasses() {
+        String value = properties.getProperty("scan.all.classes");
+        return "true".equalsIgnoreCase(value);
+    }
 }

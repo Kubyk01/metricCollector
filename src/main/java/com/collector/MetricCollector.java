@@ -41,7 +41,7 @@ public final class MetricCollector {
         definitions.putIfAbsent(name, new MetricDefinition(name, unit, origin, type, description, tags));
     }
 
-    public static void report(String metricName, String componentName, Object value,
+    public static void submit(String metricName, String componentName, Object value,
                               String key, List<String> tags) {
         if (ingestionPort == null) {
             LOGGER.warn("Ingestion port is null, metric not sent");

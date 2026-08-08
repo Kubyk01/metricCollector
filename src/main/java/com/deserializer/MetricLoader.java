@@ -10,7 +10,12 @@ import java.util.List;
 import java.util.Map;
 
 public class MetricLoader {
+    private final MetricIdCache metricIdCache;
     private final MetricDeserializer metricDeserializer = new MetricDeserializer();
+
+    public MetricLoader(MetricIdCache metricIdCache) {
+        this.metricIdCache = metricIdCache;
+    }
 
     public Mono<Void> loadAndRegisterMetrics() {
         String location = EnvVarProvider.getMetricsConfigLocation();

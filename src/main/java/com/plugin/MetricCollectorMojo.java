@@ -1,9 +1,11 @@
 package com.plugin;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.configuration.EnvVarProvider;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import javassist.*;
+import javassist.expr.ExprEditor;
+import javassist.expr.FieldAccess;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
@@ -33,11 +35,14 @@ public class MetricCollectorMojo extends AbstractMojo {
     private String configLocation;
 
     private final ObjectMapper mapper = new ObjectMapper()
-            .registerModule(new JavaTimeModule());
+        .registerModule(new JavaTimeModule());
+
+    private boolean scanAllClasses;
 
     @Override
     public void execute() throws MojoExecutionException {
-        getLog().info("MetricCollector: instrumenting classes...");
+        scanAllClasses = EnvVarProvider.isScanAllClasses();
+        getLog().info("MetricCollector: instrumenting classes... scanAllClasses=" + scanAllClasses);
 
         List<Path> configFiles = findConfigFiles();
         if (configFiles.isEmpty()) {
@@ -45,34 +50,23 @@ public class MetricCollectorMojo extends AbstractMojo {
             return;
         }
 
-        List<Instruction> instructions = new ArrayList<>();
+        List<Instruction> allInstructions = new ArrayList<>();
         for (Path file : configFiles) {
             try {
-                JsonNode root = mapper.readTree(file.toFile());
-                JsonNode metrics = root.get("metrics");
-                if (metrics == null || !metrics.isArray()) continue;
-                for (JsonNode metricNode : metrics) {
-                    String metricName = metricNode.get("name").asText();
-                    String unit = metricNode.get("unit").asText();
-                    String origin = metricNode.get("origin").asText();
-                    String type = metricNode.get("type").asText();
-                    String description = metricNode.has("description") ? metricNode.get("description").asText() : null;
-                    List<String> tags = metricNode.has("tags")
-                            ? mapper.convertValue(metricNode.get("tags"), List.class)
-                            : Collections.emptyList();
+                MetricDeserializedComponent.MetricConfig config = mapper.readValue(file.toFile(), MetricDeserializedComponent.MetricConfig.class);
+                if (config.metrics == null) continue;
+                for (MetricDeserializedComponent.MetricDef metric : config.metrics) {
+                    if (metric.components == null) continue;
+                    for (MetricDeserializedComponent comp : metric.components) {
+                        if (comp.getTrigger() != null || comp.getValue() != null) {
+                            String metricName = metric.name;
+                            String description = metric.description;
+                            List<String> tags = metric.tags != null ? metric.tags : Collections.emptyList();
 
-                    JsonNode components = metricNode.get("components");
-                    if (components == null) continue;
-                    for (JsonNode comp : components) {
-                        String compName = comp.get("name").asText();
-                        String triggerExpr = comp.has("trigger") ? comp.get("trigger").asText() : null;
-                        String valueExpr = comp.has("value") ? comp.get("value").asText() : null;
-                        if (triggerExpr == null || valueExpr == null) continue;
-
-                        Instruction instr = parseInstruction(metricName, compName, triggerExpr, valueExpr,
-                                unit, origin, type, description, tags);
-                        if (instr != null) {
-                            instructions.add(instr);
+                            Instruction instr = buildInstruction(comp, metricName, description, tags);
+                            if (instr != null) {
+                                allInstructions.add(instr);
+                            }
                         }
                     }
                 }
@@ -81,7 +75,7 @@ public class MetricCollectorMojo extends AbstractMojo {
             }
         }
 
-        if (instructions.isEmpty()) {
+        if (allInstructions.isEmpty()) {
             getLog().info("No instrumentable components found.");
             return;
         }
@@ -94,72 +88,279 @@ public class MetricCollectorMojo extends AbstractMojo {
         }
         pool.appendSystemPath();
 
-        for (Instruction instr : instructions) {
+        List<Instruction> explicitInstructions = allInstructions.stream()
+            .filter(instr -> instr.className != null)
+            .collect(Collectors.toList());
+
+        List<Instruction> globalInstructions = allInstructions.stream()
+            .filter(instr -> instr.className == null && instr.fieldName != null && instr.triggerMethodName == null)
+            .collect(Collectors.toList());
+
+        for (Instruction instr : explicitInstructions) {
+            instrumentClass(pool, instr);
+        }
+
+        if (scanAllClasses && !globalInstructions.isEmpty()) {
+            Map<String, List<Instruction>> fieldToInstructions = globalInstructions.stream()
+                .collect(Collectors.groupingBy(instr -> instr.fieldName));
+
+            getLog().info("Scanning all classes for fields: " + fieldToInstructions.keySet());
+
             try {
-                CtClass ctClass = pool.get(instr.className);
-                if (ctClass.isFrozen()) ctClass.defrost();
+                List<CtClass> allClasses = findAllClasses(pool, outputDirectory.toPath());
+                for (CtClass ctClass : allClasses) {
+                    if (ctClass.isFrozen()) ctClass.defrost();
+                    String className = ctClass.getName();
+                    boolean modified = false;
 
-                CtMethod method = ctClass.getDeclaredMethod(instr.methodName);
-                if (method != null) {
-                    insertReportCall(method, instr);
-                    getLog().info("Instrumented method " + instr.className + "." + instr.methodName);
+                    for (Map.Entry<String, List<Instruction>> entry : fieldToInstructions.entrySet()) {
+                        String fieldName = entry.getKey();
+                        try {
+                            CtField field = ctClass.getDeclaredField(fieldName);
+                            if (field != null) {
+                                instrumentFieldChangesGlobal(ctClass, fieldName, entry.getValue());
+                                modified = true;
+                            }
+                        } catch (NotFoundException ignored) {
+                        }
+                    }
+
+                    if (modified) {
+                        ctClass.writeFile(outputDirectory.getAbsolutePath());
+                        getLog().debug("Instrumented class " + className);
+                    }
+                    ctClass.detach();
                 }
-
-                String setterName = "set" + capitalize(instr.fieldName);
-                try {
-                    CtMethod setter = ctClass.getDeclaredMethod(setterName);
-                    insertReportCall(setter, instr);
-                    getLog().info("Instrumented setter " + instr.className + "." + setterName);
-                } catch (NotFoundException ignored) {}
-
-                ctClass.writeFile(outputDirectory.getAbsolutePath());
-                ctClass.detach();
-            } catch (NotFoundException | CannotCompileException | IOException e) {
-                getLog().error("Failed to instrument class " + instr.className, e);
+            } catch (Exception e) {
+                getLog().error("Failed during all-classes scanning", e);
             }
         }
 
         getLog().info("MetricCollector instrumentation complete.");
     }
 
+    private void instrumentClass(ClassPool pool, Instruction instr) throws MojoExecutionException {
+        try {
+            CtClass ctClass = pool.get(instr.className);
+            if (ctClass.isFrozen()) ctClass.defrost();
+
+            if (instr.triggerMethodName != null) {
+                try {
+                    CtMethod method = ctClass.getDeclaredMethod(instr.triggerMethodName);
+                    if (!Modifier.isAbstract(method.getModifiers())) {
+                        insertReportCall(method, instr);
+                        getLog().info("Instrumented trigger method " + instr.className + "." + instr.triggerMethodName);
+                    }
+                } catch (NotFoundException e) {
+                    getLog().warn("Trigger method not found: " + instr.className + "." + instr.triggerMethodName);
+                }
+            }
+
+            if (instr.fieldName != null && instr.triggerMethodName == null) {
+                instrumentFieldChanges(ctClass, instr);
+            }
+
+            ctClass.writeFile(outputDirectory.getAbsolutePath());
+            ctClass.detach();
+        } catch (NotFoundException | CannotCompileException | IOException e) {
+            throw new MojoExecutionException("Failed to instrument class " + instr.className, e);
+        }
+    }
+
+    private Instruction buildInstruction(MetricDeserializedComponent comp,
+                                         String metricName, String description, List<String> tags) {
+        try {
+            String triggerExpr = comp.getTrigger();
+            String valueExpr = comp.getValue();
+            String operationTrigger = comp.getOperation_trigger();
+            if (operationTrigger == null || operationTrigger.isEmpty()) {
+                operationTrigger = "changed";
+            }
+
+            String className = null;
+            String methodName = null;
+            String fieldName = null;
+            String key = comp.getKey() != null ? comp.getKey() : comp.getName();
+
+            if (triggerExpr != null) {
+                int lastDot = triggerExpr.lastIndexOf('.');
+                if (lastDot == -1) return null;
+                className = triggerExpr.substring(0, lastDot);
+                String methodPart = triggerExpr.substring(lastDot + 1);
+                methodName = methodPart.endsWith("()") ? methodPart.substring(0, methodPart.length() - 2) : methodPart;
+            }
+
+            if (valueExpr != null) {
+                int lastDot = valueExpr.lastIndexOf('.');
+                if (lastDot == -1) return null;
+                String valClassName = valueExpr.substring(0, lastDot);
+                fieldName = valueExpr.substring(lastDot + 1);
+
+                if (className != null && !className.equals(valClassName)) {
+                    getLog().warn("Class mismatch between trigger and value: " + triggerExpr + " vs " + valueExpr);
+                    return null;
+                }
+                if (className == null && !scanAllClasses) {
+                    className = valClassName;
+                }
+            }
+
+            if (className == null && fieldName == null) {
+                return null;
+            }
+
+            return new Instruction(
+                className, methodName, fieldName, key,
+                metricName, comp.getName(),
+                tags, operationTrigger
+            );
+        } catch (Exception e) {
+            getLog().warn("Failed to parse instruction from component: " + comp.getName(), e);
+            return null;
+        }
+    }
+
     private void insertReportCall(CtMethod method, Instruction instr) throws CannotCompileException {
+        boolean isStatic = Modifier.isStatic(method.getModifiers());
+        String fieldAccess;
+        if (instr.fieldName != null) {
+            if (isStatic) {
+                fieldAccess = instr.className + "." + instr.fieldName;
+            } else {
+                fieldAccess = "this." + instr.fieldName;
+            }
+        } else {
+            fieldAccess = "null";
+        }
+
         String code = String.format(
-                "com.collector.MetricCollector.report(\"%s\", \"%s\", this.%s, \"%s\", java.util.Collections.emptyList());",
-                instr.metricName,
-                instr.componentName,
-                instr.fieldName,
-                instr.key != null ? instr.key : "default"
+            "com.collector.MetricCollector.submit(\"%s\", \"%s\", %s, \"%s\", %s);",
+            instr.metricName,
+            instr.componentName,
+            fieldAccess,
+            instr.key,
+            tagsAsJavaList(instr.tags)
         );
         method.insertBefore(code);
     }
 
-    private Instruction parseInstruction(String metricName, String componentName,
-                                         String triggerExpr, String valueExpr,
-                                         String unit, String origin, String type,
-                                         String description, List<String> tags) {
-        try {
-            int lastDot = triggerExpr.lastIndexOf('.');
-            if (lastDot == -1) return null;
-            String className = triggerExpr.substring(0, lastDot);
-            String methodPart = triggerExpr.substring(lastDot + 1);
-            String methodName = methodPart.endsWith("()") ? methodPart.substring(0, methodPart.length() - 2) : methodPart;
+    private void instrumentFieldChanges(CtClass ctClass, Instruction instr) throws CannotCompileException, NotFoundException {
+        String fieldName = instr.fieldName;
+        String className = ctClass.getName();
+        CtField field = ctClass.getDeclaredField(fieldName);
+        boolean isStatic = Modifier.isStatic(field.getModifiers());
+        String fieldType = field.getType().getName();
 
-            int lastDotValue = valueExpr.lastIndexOf('.');
-            if (lastDotValue == -1) return null;
-            String valueClassName = valueExpr.substring(0, lastDotValue);
-            String fieldName = valueExpr.substring(lastDotValue + 1);
-            if (!className.equals(valueClassName)) {
-                getLog().warn("Class mismatch between trigger and value");
-                return null;
-            }
+        String comparisonExpr = generateComparisonExpression(fieldType, instr.operationTrigger);
+        String submitCall = String.format(
+            "com.collector.MetricCollector.submit(\"%s\", \"%s\", newValue, \"%s\", %s);",
+            instr.metricName,
+            instr.componentName,
+            instr.key,
+            tagsAsJavaList(instr.tags)
+        );
 
-            String key = componentName;
-            return new Instruction(className, methodName, fieldName, key,
-                    metricName, componentName, unit, origin, type, description, tags);
-        } catch (Exception e) {
-            getLog().warn("Failed to parse instruction from trigger=" + triggerExpr + ", value=" + valueExpr, e);
-            return null;
+        String replacement = buildReplacement(isStatic, className, fieldName, fieldType, comparisonExpr, submitCall);
+        applyFieldWriteInstrumentation(ctClass, className, fieldName, replacement);
+    }
+
+    private void instrumentFieldChangesGlobal(CtClass ctClass, String fieldName, List<Instruction> instructions)
+        throws CannotCompileException, NotFoundException {
+        String className = ctClass.getName();
+        CtField field = ctClass.getDeclaredField(fieldName);
+        boolean isStatic = Modifier.isStatic(field.getModifiers());
+        String fieldType = field.getType().getName();
+
+        StringBuilder body = new StringBuilder();
+        for (Instruction instr : instructions) {
+            String comparisonExpr = generateComparisonExpression(fieldType, instr.operationTrigger);
+            String submitCall = String.format(
+                "com.collector.MetricCollector.submit(\"%s\", \"%s\", newValue, \"%s\", %s);",
+                instr.metricName,
+                instr.componentName,
+                instr.key,
+                tagsAsJavaList(instr.tags)
+            );
+            body.append("if (").append(comparisonExpr).append(") { ")
+                .append(submitCall)
+                .append(" } ");
         }
+
+        String replacement = buildReplacement(isStatic, className, fieldName, fieldType,
+            "true", body.toString());
+        applyFieldWriteInstrumentation(ctClass, className, fieldName, replacement);
+    }
+
+    private String buildReplacement(boolean isStatic, String className, String fieldName,
+                                    String fieldType, String condition, String action) {
+        if (isStatic) {
+            return String.format(
+                "{ %s oldValue = %s.%s; $proceed($$); %s newValue = %s.%s; if (%s) { %s } }",
+                fieldType, className, fieldName,
+                fieldType, className, fieldName,
+                condition, action
+            );
+        } else {
+            return String.format(
+                "{ %s oldValue = $0.%s; $proceed($$); %s newValue = $0.%s; if (%s) { %s } }",
+                fieldType, fieldName,
+                fieldType, fieldName,
+                condition, action
+            );
+        }
+    }
+
+    private void applyFieldWriteInstrumentation(CtClass ctClass, String className, String fieldName, String replacement)
+        throws CannotCompileException {
+        CtBehavior[] behaviors = ctClass.getDeclaredBehaviors();
+        for (CtBehavior behavior : behaviors) {
+            if (behavior.isEmpty()) continue;
+            behavior.instrument(new ExprEditor() {
+                public void edit(FieldAccess f) throws CannotCompileException {
+                    if (f.isWriter() && f.getFieldName().equals(fieldName) && f.getClassName().equals(className)) {
+                        f.replace(replacement);
+                    }
+                }
+            });
+        }
+    }
+
+    private String generateComparisonExpression(String fieldType, String operationTrigger) {
+        boolean isNumeric = isNumericType(fieldType);
+        boolean isBoolean = "boolean".equals(fieldType) || "java.lang.Boolean".equals(fieldType);
+
+        if (isNumeric) {
+            switch (operationTrigger.toLowerCase()) {
+                case "increase": return "newValue > oldValue";
+                case "decrease": return "newValue < oldValue";
+                default: return "newValue != oldValue";
+            }
+        } else if (isBoolean) {
+            return "newValue != oldValue";
+        } else {
+            return "(oldValue == null ? newValue != null : !oldValue.equals(newValue))";
+        }
+    }
+
+    private boolean isNumericType(String type) {
+        return type.equals("byte") || type.equals("short") || type.equals("int") || type.equals("long") ||
+            type.equals("float") || type.equals("double") ||
+            type.equals("java.lang.Byte") || type.equals("java.lang.Short") ||
+            type.equals("java.lang.Integer") || type.equals("java.lang.Long") ||
+            type.equals("java.lang.Float") || type.equals("java.lang.Double");
+    }
+
+    private String tagsAsJavaList(List<String> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return "java.util.Collections.emptyList()";
+        }
+        StringBuilder sb = new StringBuilder("java.util.Arrays.asList(");
+        for (int i = 0; i < tags.size(); i++) {
+            sb.append("\"").append(tags.get(i)).append("\"");
+            if (i < tags.size() - 1) sb.append(", ");
+        }
+        sb.append(")");
+        return sb.toString();
     }
 
     private List<Path> findConfigFiles() throws MojoExecutionException {
@@ -175,38 +376,53 @@ public class MetricCollectorMojo extends AbstractMojo {
         }
         try (Stream<Path> walk = Files.walk(configDir)) {
             return walk.filter(Files::isRegularFile)
-                    .filter(p -> p.toString().endsWith(".json"))
-                    .collect(Collectors.toList());
+                .filter(p -> p.toString().endsWith(".json"))
+                .collect(Collectors.toList());
         } catch (IOException e) {
             throw new MojoExecutionException("Failed to scan config directory", e);
         }
     }
 
-    private String capitalize(String s) {
-        if (s == null || s.isEmpty()) return s;
-        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    private List<CtClass> findAllClasses(ClassPool pool, Path root) throws Exception {
+        List<CtClass> classes = new ArrayList<>();
+        Files.walk(root)
+            .filter(Files::isRegularFile)
+            .filter(p -> p.toString().endsWith(".class"))
+            .forEach(p -> {
+                try {
+                    String relative = root.relativize(p).toString();
+                    String className = relative.replace(File.separatorChar, '.')
+                        .replace(".class", "");
+                    CtClass ct = pool.get(className);
+                    classes.add(ct);
+                } catch (NotFoundException e) {
+                    getLog().warn("Could not load class: " + p, e);
+                }
+            });
+        return classes;
     }
 
     private static class Instruction {
-        final String className, methodName, fieldName, key;
-        final String metricName, componentName;
-        final String unit, origin, type, description;
+        final String className;
+        final String triggerMethodName;
+        final String fieldName;
+        final String key;
+        final String metricName;
+        final String componentName;
         final List<String> tags;
-        Instruction(String className, String methodName, String fieldName, String key,
+        final String operationTrigger;
+
+        Instruction(String className, String triggerMethodName, String fieldName, String key,
                     String metricName, String componentName,
-                    String unit, String origin, String type,
-                    String description, List<String> tags) {
+                    List<String> tags, String operationTrigger) {
             this.className = className;
-            this.methodName = methodName;
+            this.triggerMethodName = triggerMethodName;
             this.fieldName = fieldName;
             this.key = key;
             this.metricName = metricName;
             this.componentName = componentName;
-            this.unit = unit;
-            this.origin = origin;
-            this.type = type;
-            this.description = description;
             this.tags = tags;
+            this.operationTrigger = operationTrigger;
         }
     }
 }
