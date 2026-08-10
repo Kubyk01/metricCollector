@@ -2,69 +2,136 @@ package com.collector;
 
 import com.adapter.secondary.httpmetricingestion.HTTPMetricAdapter;
 import com.adapter.secondary.grpcmetricingestion.GRPCMetricAdapter;
-import com.collector.error.ExceptionHandler;
-import com.collector.error.GrpcErrorHandler;
 import com.configuration.EnvVarProvider;
+import com.deserializer.MetricIdCache;
 import com.deserializer.MetricStubRunner;
 import com.model.Metric;
 import com.model.MetricComponent;
-import com.port.secondary.MetricIngestionPort;
+import com.port.secondary.MetricPort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.time.ZonedDateTime;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class MetricCollector {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MetricCollector.class);
-    private static final MetricIngestionPort ingestionPort;
+    private static final MetricPort metricPort;
+    private static final Mono<MetricIdCache> cacheMono;
 
-
-    private final ExceptionHandler exceptionHandler = new ExceptionHandler();
-    private final GrpcErrorHandler httpErrorHandler = new GrpcErrorHandler();
+    private static final int BATCH_SIZE = EnvVarProvider.getBatchSize();
+    private static final Map<UUID, List<MetricComponent>> batchBuffer = new ConcurrentHashMap<>();
+    private static final AtomicBoolean shutdown = new AtomicBoolean(false);
+    private static final Disposable flushDisposable;
 
     static {
         String protocol = EnvVarProvider.getProtocol();
         if ("http".equalsIgnoreCase(protocol)) {
-            ingestionPort = new HTTPMetricAdapter();
+            metricPort = new HTTPMetricAdapter();
         } else {
-            ingestionPort = new GRPCMetricAdapter();
+            metricPort = new GRPCMetricAdapter();
         }
         LOGGER.info("MetricCollector initialized with protocol: {}", protocol);
 
-        MetricStubRunner metricStubRunner = new MetricStubRunner(ingestionPort);
-        metricStubRunner.
+        MetricStubRunner runner = new MetricStubRunner(metricPort);
+        cacheMono = runner.loadAndRegisterMetrics().cache();
+        cacheMono.subscribe(
+            cache -> LOGGER.info("Metric cache loaded, size: {}", cache),
+            error -> LOGGER.error("Failed to load metric cache", error)
+        );
+
+        if (BATCH_SIZE > 0) {
+            flushDisposable = Flux.interval(Duration.ofSeconds(5))
+                .subscribe(tick -> flushAllBatches());
+            LOGGER.info("Batch processing enabled with size={}, flush interval=5s", BATCH_SIZE);
+        } else {
+            flushDisposable = null;
+            LOGGER.info("Batch processing disabled (batch.size <= 0)");
+        }
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            shutdown.set(true);
+            if (flushDisposable != null && !flushDisposable.isDisposed()) {
+                flushDisposable.dispose();
+            }
+            flushAllBatches();
+        }));
     }
 
-    private MetricCollector() {}
+    public static void submit(Metric metric) {
+        metricPort.sendMetric(metric);
+    }
 
-    public static void submit(Metric metric){
-
+    public static Mono<Void> submit(UUID metricId, List<MetricComponent> metricComponents) {
+        return metricPort.sendMetricsComponents(metricId, metricComponents);
     }
 
     public static Mono<Void> submit(String metricName, String componentName, Object value) {
-        if (ingestionPort == null) {
-            LOGGER.warn("Ingestion port is null, metric not sent");
-            return Mono.error(new IllegalStateException("Ingestion port is null"));
-        }
+        return cacheMono
+            .flatMap(cache -> {
+                UUID metricId = cache.getMetricIdByMetricName(metricName);
+                if (metricId == null) {
+                    return Mono.error(new IllegalArgumentException("Metric not found: " + metricName));
+                }
+                MetricComponent component = new MetricComponent(
+                    componentName,
+                    ZonedDateTime.now(),
+                    value != null ? value.toString() : null
+                );
 
-        UUID metricId = UUID_METRIC_NAME_MAP.get(metricName);
-        MetricComponent component = new MetricComponent(
-                componentName,
-                ZonedDateTime.now(),
-                value != null ? value.toString() : null
-        );
+                if (BATCH_SIZE <= 0) {
+                    return metricPort.sendComponentsValues(
+                        Collections.singletonMap(metricId, Collections.singletonList(component))
+                    );
+                }
 
-        return ingestionPort.sendComponentsValues(metricId, component);
-
+                return Mono.fromRunnable(() -> {
+                    List<MetricComponent> list = batchBuffer.computeIfAbsent(
+                        metricId,
+                        k -> Collections.synchronizedList(new ArrayList<>())
+                    );
+                    synchronized (list) {
+                        list.add(component);
+                        if (list.size() >= BATCH_SIZE) {
+                            List<MetricComponent> toSend = batchBuffer.remove(metricId);
+                            if (toSend != null && !toSend.isEmpty()) {
+                                metricPort.sendComponentsValues(
+                                    Collections.singletonMap(metricId, toSend)
+                                ).subscribe(
+                                    null,
+                                    err -> LOGGER.error("Failed to send batch for metricId {}: {}", metricId, err.getMessage())
+                                );
+                            }
+                        }
+                    }
+                });
+            });
     }
 
+    private static void flushAllBatches() {
+        if (shutdown.get() && batchBuffer.isEmpty()) {
+            return;
+        }
+        Map<UUID, List<MetricComponent>> allRemaining = new HashMap<>(batchBuffer);
+        batchBuffer.clear();
+
+        if (!allRemaining.isEmpty()) {
+            metricPort.sendComponentsValues(allRemaining)
+                .subscribe(
+                    null,
+                    err -> LOGGER.error("Failed to send remaining batches on flush", err)
+                );
+        }
+    }
 
     public Mono<Void> sendMetricsRetry(List<Metric> metrics) {
         return null;
     }
-
 }

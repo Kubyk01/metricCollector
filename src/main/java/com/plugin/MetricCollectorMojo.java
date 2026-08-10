@@ -60,10 +60,7 @@ public class MetricCollectorMojo extends AbstractMojo {
                     for (MetricDeserializedComponent comp : metric.components) {
                         if (comp.getTrigger() != null || comp.getValue() != null) {
                             String metricName = metric.name;
-                            String description = metric.description;
-                            List<String> tags = metric.tags != null ? metric.tags : Collections.emptyList();
-
-                            Instruction instr = buildInstruction(comp, metricName, description, tags);
+                            Instruction instr = buildInstruction(comp, metricName);
                             if (instr != null) {
                                 allInstructions.add(instr);
                             }
@@ -167,8 +164,7 @@ public class MetricCollectorMojo extends AbstractMojo {
         }
     }
 
-    private Instruction buildInstruction(MetricDeserializedComponent comp,
-                                         String metricName, String description, List<String> tags) {
+    private Instruction buildInstruction(MetricDeserializedComponent comp, String metricName) {
         try {
             String triggerExpr = comp.getTrigger();
             String valueExpr = comp.getValue();
@@ -180,7 +176,6 @@ public class MetricCollectorMojo extends AbstractMojo {
             String className = null;
             String methodName = null;
             String fieldName = null;
-            String key = comp.getKey() != null ? comp.getKey() : comp.getName();
 
             if (triggerExpr != null) {
                 int lastDot = triggerExpr.lastIndexOf('.');
@@ -210,9 +205,8 @@ public class MetricCollectorMojo extends AbstractMojo {
             }
 
             return new Instruction(
-                className, methodName, fieldName, key,
-                metricName, comp.getName(),
-                tags, operationTrigger
+                className, methodName, fieldName,
+                metricName, comp.getName(), operationTrigger
             );
         } catch (Exception e) {
             getLog().warn("Failed to parse instruction from component: " + comp.getName(), e);
@@ -234,12 +228,11 @@ public class MetricCollectorMojo extends AbstractMojo {
         }
 
         String code = String.format(
-            "com.collector.MetricCollector.submit(\"%s\", \"%s\", %s, \"%s\", %s);",
+            "com.collector.MetricCollector.submit(\"%s\", \"%s\", %s)" +
+                ".subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()).subscribe();",
             instr.metricName,
             instr.componentName,
-            fieldAccess,
-            instr.key,
-            tagsAsJavaList(instr.tags)
+            fieldAccess
         );
         method.insertBefore(code);
     }
@@ -253,11 +246,10 @@ public class MetricCollectorMojo extends AbstractMojo {
 
         String comparisonExpr = generateComparisonExpression(fieldType, instr.operationTrigger);
         String submitCall = String.format(
-            "com.collector.MetricCollector.submit(\"%s\", \"%s\", newValue, \"%s\", %s);",
+            "com.collector.MetricCollector.submit(\"%s\", \"%s\", newValue)" +
+                ".subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()).subscribe();",
             instr.metricName,
-            instr.componentName,
-            instr.key,
-            tagsAsJavaList(instr.tags)
+            instr.componentName
         );
 
         String replacement = buildReplacement(isStatic, className, fieldName, fieldType, comparisonExpr, submitCall);
@@ -275,19 +267,17 @@ public class MetricCollectorMojo extends AbstractMojo {
         for (Instruction instr : instructions) {
             String comparisonExpr = generateComparisonExpression(fieldType, instr.operationTrigger);
             String submitCall = String.format(
-                "com.collector.MetricCollector.submit(\"%s\", \"%s\", newValue, \"%s\", %s);",
+                "com.collector.MetricCollector.submit(\"%s\", \"%s\", newValue)" +
+                    ".subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()).subscribe();",
                 instr.metricName,
-                instr.componentName,
-                instr.key,
-                tagsAsJavaList(instr.tags)
+                instr.componentName
             );
             body.append("if (").append(comparisonExpr).append(") { ")
                 .append(submitCall)
                 .append(" } ");
         }
 
-        String replacement = buildReplacement(isStatic, className, fieldName, fieldType,
-            "true", body.toString());
+        String replacement = buildReplacement(isStatic, className, fieldName, fieldType, "true", body.toString());
         applyFieldWriteInstrumentation(ctClass, className, fieldName, replacement);
     }
 
@@ -350,19 +340,6 @@ public class MetricCollectorMojo extends AbstractMojo {
             type.equals("java.lang.Float") || type.equals("java.lang.Double");
     }
 
-    private String tagsAsJavaList(List<String> tags) {
-        if (tags == null || tags.isEmpty()) {
-            return "java.util.Collections.emptyList()";
-        }
-        StringBuilder sb = new StringBuilder("java.util.Arrays.asList(");
-        for (int i = 0; i < tags.size(); i++) {
-            sb.append("\"").append(tags.get(i)).append("\"");
-            if (i < tags.size() - 1) sb.append(", ");
-        }
-        sb.append(")");
-        return sb.toString();
-    }
-
     private List<Path> findConfigFiles() throws MojoExecutionException {
         Path configDir = Paths.get(project.getBasedir().getAbsolutePath(), configLocation);
         if (!Files.exists(configDir)) {
@@ -406,22 +383,17 @@ public class MetricCollectorMojo extends AbstractMojo {
         final String className;
         final String triggerMethodName;
         final String fieldName;
-        final String key;
         final String metricName;
         final String componentName;
-        final List<String> tags;
         final String operationTrigger;
 
-        Instruction(String className, String triggerMethodName, String fieldName, String key,
-                    String metricName, String componentName,
-                    List<String> tags, String operationTrigger) {
+        Instruction(String className, String triggerMethodName, String fieldName,
+                    String metricName, String componentName, String operationTrigger) {
             this.className = className;
             this.triggerMethodName = triggerMethodName;
             this.fieldName = fieldName;
-            this.key = key;
             this.metricName = metricName;
             this.componentName = componentName;
-            this.tags = tags;
             this.operationTrigger = operationTrigger;
         }
     }

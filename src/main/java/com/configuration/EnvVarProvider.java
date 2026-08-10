@@ -83,4 +83,18 @@ public final class EnvVarProvider {
 
         return "true".equalsIgnoreCase(value);
     }
+
+    public static int getBatchSize() {
+        VarEnvironments environment = VarEnvironments.parse(env);
+        String propertyKey = String.format("batch.size.%s", environment.name().toLowerCase());
+        String value = properties.getProperty(propertyKey);
+        if (value == null) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
 }

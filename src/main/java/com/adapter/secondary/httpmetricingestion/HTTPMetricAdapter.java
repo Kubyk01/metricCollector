@@ -2,17 +2,15 @@ package com.adapter.secondary.httpmetricingestion;
 
 import com.model.Metric;
 import com.model.MetricComponent;
-import com.port.secondary.MetricIngestionPort;
-import com.port.secondary.MetricRetrievalPort;
+import com.port.secondary.MetricPort;
 import reactor.core.Disposable;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-public class HTTPMetricAdapter implements MetricIngestionPort, MetricRetrievalPort, Disposable {
+public class HTTPMetricAdapter implements MetricPort, Disposable {
 
     @Override
     public Mono<Void> sendMetric(Metric metric) {
@@ -27,18 +25,20 @@ public class HTTPMetricAdapter implements MetricIngestionPort, MetricRetrievalPo
     }
 
     @Override
-    public Mono<Void> sendComponentsValues(UUID metricId, MetricComponent metricComponent) {
-        return null;
+    public Mono<Void> sendComponentsValues(Map<UUID, List<MetricComponent>> componentsByMetricId) {
+        // TODO: реализовать отправку компонентов через HTTP (например, с группировкой по метрикам)
+        return Mono.empty();
     }
 
     @Override
     public Mono<Void> sendMetricsComponents(UUID metricId, List<MetricComponent> metricComponents) {
-        return null;
+        return MetricPort.super.sendMetricsComponents(metricId, metricComponents);
     }
 
     @Override
     public Mono<Map<String, String>> retrievalUUIDs(List<String> metricsNames) {
-        return null;
+        // TODO: реализовать получение UUID
+        return Mono.empty();
     }
 
     @Override

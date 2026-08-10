@@ -13,7 +13,7 @@ option java_outer_classname = "MetricComponentProto";
 service MetricComponentService {
   rpc AddMetricComponents(AddMetricComponentsRequest) returns (google.protobuf.Empty);
 
-  rpc AddComponentValues(AddComponentValuesRequest) returns (google.protobuf.Empty);
+  rpc AddComponentValues(AddBatchComponentsRequest) returns (google.protobuf.Empty);
 }
 
 message AddMetricComponentsRequest {
@@ -21,9 +21,13 @@ message AddMetricComponentsRequest {
   repeated MetricComponentDTO components = 2;
 }
 
+message AddBatchComponentsRequest {
+  repeated AddComponentValuesRequest entries = 1;
+}
+
 message AddComponentValuesRequest {
   string metric_id = 1;
-  ComponentStubDTO component_stub = 2;
+  repeated ComponentStubDTO component_stub = 2;
 }
 
 message ComponentStubDTO {

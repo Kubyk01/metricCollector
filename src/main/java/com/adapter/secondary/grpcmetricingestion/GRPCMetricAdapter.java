@@ -1,6 +1,8 @@
 package com.adapter.secondary.grpcmetricingestion;
 
+import com.example.metrichub.adapter.driving.grpc.AddBatchComponentsRequest;
 import com.example.metrichub.adapter.driving.grpc.AddComponentValuesRequest;
+import com.example.metrichub.adapter.driving.grpc.AddMetricComponentsRequest;
 import com.example.metrichub.adapter.driving.grpc.GetMetricIdsByNameRequest;
 import com.example.metrichub.adapter.driving.grpc.GetMetricIdsByNameResponse;
 import com.example.metrichub.adapter.driving.grpc.MetricComponentDTO;
@@ -11,8 +13,7 @@ import com.example.metrichub.adapter.driving.grpc.ReactorMetricComponentServiceG
 import com.example.metrichub.adapter.driving.grpc.ReactorMetricServiceGrpc;
 import com.model.Metric;
 import com.model.MetricComponent;
-import com.port.secondary.MetricIngestionPort;
-import com.port.secondary.MetricRetrievalPort;
+import com.port.secondary.MetricPort;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import reactor.core.Disposable;
@@ -23,7 +24,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-public class GRPCMetricAdapter implements MetricIngestionPort, MetricRetrievalPort, Disposable {
+public class GRPCMetricAdapter implements MetricPort, Disposable {
 
     private final ManagedChannel channel;
     private final ReactorMetricServiceGrpc.ReactorMetricServiceStub metricStub;
@@ -59,19 +60,51 @@ public class GRPCMetricAdapter implements MetricIngestionPort, MetricRetrievalPo
     }
 
     @Override
-    public Mono<Void> sendComponentsValues(UUID metricId, MetricComponent metricComponent) {
-        AddComponentValuesRequest request = AddComponentValuesRequest.newBuilder()
-            .build();;
+    public Mono<Void> sendComponentsValues(Map<UUID, List<MetricComponent>> componentsByMetricId) {
+        if (componentsByMetricId == null || componentsByMetricId.isEmpty()) {
+            return Mono.empty();
+        }
+
+        AddBatchComponentsRequest.Builder batchBuilder = AddBatchComponentsRequest.newBuilder();
+
+        for (Map.Entry<UUID, List<MetricComponent>> entry : componentsByMetricId.entrySet()) {
+            UUID metricId = entry.getKey();
+            List<MetricComponent> comps = entry.getValue();
+            if (comps == null || comps.isEmpty()) {
+                continue;
+            }
+
+            AddComponentValuesRequest.Builder entryBuilder = AddComponentValuesRequest.newBuilder()
+                .setMetricId(metricId.toString());
+
+            for (MetricComponent comp : comps) {
+                entryBuilder.addComponentStub(toProtoComponentStub(comp));
+            }
+
+            batchBuilder.addEntries(entryBuilder.build());
+        }
+
+        AddBatchComponentsRequest request = batchBuilder.build();
+        if (request.getEntriesCount() == 0) {
+            return Mono.empty();
+        }
+
         return componentStub.addComponentValues(request).then();
     }
 
     @Override
     public Mono<Void> sendMetricsComponents(UUID metricId, List<MetricComponent> metricComponents) {
-
-        //todo implementcomponentStub.addMetricComponents();
-        return null;
+        if (metricComponents == null || metricComponents.isEmpty()) {
+            return Mono.empty();
+        }
+        AddMetricComponentsRequest request = AddMetricComponentsRequest.newBuilder()
+            .setMetricId(metricId.toString())
+            .addAllComponents(metricComponents.stream()
+                .map(this::toProtoComponent)
+                .collect(Collectors.toList()))
+            .build();
+        return componentStub.addMetricComponents(request).then();
     }
-
     @Override
     public Mono<Map<String, String>> retrievalUUIDs(List<String> metricsNames) {
         GetMetricIdsByNameRequest request = GetMetricIdsByNameRequest.newBuilder()
@@ -115,6 +148,16 @@ public class GRPCMetricAdapter implements MetricIngestionPort, MetricRetrievalPo
             builder.addAllTags(comp.getTags());
         }
         return builder.build();
+    }
+
+    private com.example.metrichub.adapter.driving.grpc.ComponentStubDTO toProtoComponentStub(MetricComponent comp) {
+        return com.example.metrichub.adapter.driving.grpc.ComponentStubDTO.newBuilder()
+            .setComponentName(comp.getName())
+            .setTimestamp(com.google.protobuf.Timestamp.newBuilder()
+                .setSeconds(comp.getTimestamp().toEpochSecond())
+                .setNanos(comp.getTimestamp().getNano()))
+            .setValue(comp.getValue() != null ? comp.getValue() : "")
+            .build();
     }
 
     private ProtoMetricType protoType(com.model.MetricType type) {
