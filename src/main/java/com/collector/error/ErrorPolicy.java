@@ -1,4 +1,4 @@
-package com.client.error;
+package com.collector.error;
 
 public enum ErrorPolicy {
 

@@ -1,6 +1,6 @@
 package com.storage;
 
-import com.client.CollectorsClient;
+import com.collector.MetricCollector;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,13 +27,13 @@ import java.util.stream.Stream;
 public class FailedBatchRetryService {
     private static final ObjectMapper objectMapper = new ObjectMapper()
         .registerModule(new JavaTimeModule());
-    private final CollectorsClient client;
+    private final MetricCollector client;
     private static final Scheduler RETRY_SCHEDULER = Schedulers.newSingle("metric-retry-scheduler");
     private static final Scheduler FILE_SCHEDULER = Schedulers.newBoundedElastic(2, 10000, "metric-file-scheduler");
     public static final int MAX_BATCH_SIZE = 200_000;
     private static final Logger LOGGER = LoggerFactory.getLogger(FailedBatchRetryService.class.getName());
 
-    public FailedBatchRetryService(CollectorsClient client) {
+    public FailedBatchRetryService(MetricCollector client) {
         this.client = client;
     }
 

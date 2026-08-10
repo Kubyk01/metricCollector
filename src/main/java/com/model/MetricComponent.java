@@ -14,6 +14,10 @@ public class MetricComponent {
 
     protected MetricComponent() {}
 
+    public MetricComponent(String name, ZonedDateTime timestamp, String value) {
+        this(name, timestamp, null, value, null, null, null);
+    }
+
     public MetricComponent(String name, ZonedDateTime timestamp, String key, String value, MetricComponentOperationType operation) {
         this(name, timestamp, key, value, operation, null, null);
     }

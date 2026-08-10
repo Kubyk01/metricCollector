@@ -1,4 +1,4 @@
-package com.client.error;
+package com.collector.error;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.model.Metric;

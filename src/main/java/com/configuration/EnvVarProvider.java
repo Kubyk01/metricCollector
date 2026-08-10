@@ -66,7 +66,10 @@ public final class EnvVarProvider {
     }
 
     public static String getProtocol() {
-        String protocol = properties.getProperty("protocol");
+        VarEnvironments environment = VarEnvironments.parse(env);
+        String propertyKey = String.format("protocol.%s", environment.name().toLowerCase());
+        String protocol = properties.getProperty(propertyKey);
+
         if (protocol == null) {
             return "grpc";
         }
@@ -74,7 +77,10 @@ public final class EnvVarProvider {
     }
 
     public static boolean isScanAllClasses() {
-        String value = properties.getProperty("scan.all.classes");
+        VarEnvironments environment = VarEnvironments.parse(env);
+        String propertyKey = String.format("scan.all.classes.%s", environment.name().toLowerCase());
+        String value = properties.getProperty(propertyKey);
+
         return "true".equalsIgnoreCase(value);
     }
 }

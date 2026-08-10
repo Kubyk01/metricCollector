@@ -1,54 +1,85 @@
 package com.adapter.secondary.grpcmetricingestion;
 
+import com.example.metrichub.adapter.driving.grpc.AddComponentValuesRequest;
+import com.example.metrichub.adapter.driving.grpc.GetMetricIdsByNameRequest;
+import com.example.metrichub.adapter.driving.grpc.GetMetricIdsByNameResponse;
+import com.example.metrichub.adapter.driving.grpc.MetricComponentDTO;
 import com.example.metrichub.adapter.driving.grpc.MetricDTO;
 import com.example.metrichub.adapter.driving.grpc.MetricRequest;
 import com.example.metrichub.adapter.driving.grpc.ProtoMetricType;
+import com.example.metrichub.adapter.driving.grpc.ReactorMetricComponentServiceGrpc;
 import com.example.metrichub.adapter.driving.grpc.ReactorMetricServiceGrpc;
 import com.model.Metric;
 import com.model.MetricComponent;
 import com.port.secondary.MetricIngestionPort;
+import com.port.secondary.MetricRetrievalPort;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
-public class GRPCMetricIngestion implements MetricIngestionPort, reactor.core.Disposable {
+public class GRPCMetricAdapter implements MetricIngestionPort, MetricRetrievalPort, Disposable {
 
     private final ManagedChannel channel;
-    private final ReactorMetricServiceGrpc.ReactorMetricServiceStub reactorStub;
+    private final ReactorMetricServiceGrpc.ReactorMetricServiceStub metricStub;
+    private final ReactorMetricComponentServiceGrpc.ReactorMetricComponentServiceStub componentStub;
 
-    public GRPCMetricIngestion() {
+    public GRPCMetricAdapter() {
         String baseUrl = com.configuration.EnvVarProvider.getBaseUrl();
         String target = baseUrl.replaceFirst("^https?://", "");
         this.channel = ManagedChannelBuilder.forTarget(target)
             // todo make in env ability to use plaintext or TLS/SSL
             .usePlaintext()
             .build();
-        this.reactorStub = ReactorMetricServiceGrpc.newReactorStub(channel);
+        this.metricStub = ReactorMetricServiceGrpc.newReactorStub(channel);
+        this.componentStub = ReactorMetricComponentServiceGrpc.newReactorStub(channel);
     }
 
     @Override
-    public Mono<Void> submitMetric(Metric metric) {
-        MetricRequest request = buildRequest(metric);
-        return reactorStub.ingestMetric(request).then();
+    public Mono<Void> sendMetric(Metric metric) {
+        MetricRequest request = MetricRequest.newBuilder()
+            .addMetric(toProto(metric))
+            .build();
+        return metricStub.ingestMetric(request).then();
     }
 
     @Override
-    public Mono<Void> sendMetricsImmediately(List<Metric> metrics) {
+    public Mono<Void> sendMetrics(List<Metric> metrics) {
         MetricRequest request = MetricRequest.newBuilder()
             .addAllMetric(metrics.stream()
                 .map(this::toProto)
                 .collect(Collectors.toList()))
             .build();
-        return reactorStub.ingestMetric(request).then();
+        return metricStub.ingestMetric(request).then();
     }
 
-    private MetricRequest buildRequest(Metric metric) {
-        return MetricRequest.newBuilder()
-            .addMetric(toProto(metric))
+    @Override
+    public Mono<Void> sendComponentsValues(UUID metricId, MetricComponent metricComponent) {
+        AddComponentValuesRequest request = AddComponentValuesRequest.newBuilder()
+            .build();;
+        return componentStub.addComponentValues(request).then();
+    }
+
+    @Override
+    public Mono<Void> sendMetricsComponents(UUID metricId, List<MetricComponent> metricComponents) {
+
+        //todo implementcomponentStub.addMetricComponents();
+        return null;
+    }
+
+    @Override
+    public Mono<Map<String, String>> retrievalUUIDs(List<String> metricsNames) {
+        GetMetricIdsByNameRequest request = GetMetricIdsByNameRequest.newBuilder()
+            .addAllNames(metricsNames)
             .build();
+
+        return metricStub.getMetricIdsByName(request)
+            .map(GetMetricIdsByNameResponse::getMetricIdsMap);
     }
 
     private MetricDTO toProto(Metric metric) {
@@ -71,9 +102,9 @@ public class GRPCMetricIngestion implements MetricIngestionPort, reactor.core.Di
         return builder.build();
     }
 
-    private com.example.metrichub.adapter.driving.grpc.MetricComponentDTO toProtoComponent(MetricComponent comp) {
-        com.example.metrichub.adapter.driving.grpc.MetricComponentDTO.Builder builder =
-            com.example.metrichub.adapter.driving.grpc.MetricComponentDTO.newBuilder()
+    private MetricComponentDTO toProtoComponent(MetricComponent comp) {
+        MetricComponentDTO.Builder builder =
+            MetricComponentDTO.newBuilder()
                 .setName(comp.getName())
                 .setKey(comp.getKey() != null ? comp.getKey() : "")
                 .setTimestamp(com.google.protobuf.Timestamp.newBuilder()
