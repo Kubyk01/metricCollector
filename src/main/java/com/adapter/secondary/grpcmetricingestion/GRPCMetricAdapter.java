@@ -1,13 +1,16 @@
 package com.adapter.secondary.grpcmetricingestion;
 
+import com.collector.error.GrpcErrorHandler;
 import com.example.metrichub.adapter.driving.grpc.AddBatchComponentsRequest;
 import com.example.metrichub.adapter.driving.grpc.AddComponentValuesRequest;
 import com.example.metrichub.adapter.driving.grpc.AddMetricComponentsRequest;
+import com.example.metrichub.adapter.driving.grpc.ComponentStubDTO;
 import com.example.metrichub.adapter.driving.grpc.GetMetricIdsByNameRequest;
 import com.example.metrichub.adapter.driving.grpc.GetMetricIdsByNameResponse;
 import com.example.metrichub.adapter.driving.grpc.MetricComponentDTO;
 import com.example.metrichub.adapter.driving.grpc.MetricDTO;
 import com.example.metrichub.adapter.driving.grpc.MetricRequest;
+import com.example.metrichub.adapter.driving.grpc.ProtoMetricComponentOperationType;
 import com.example.metrichub.adapter.driving.grpc.ProtoMetricType;
 import com.example.metrichub.adapter.driving.grpc.ReactorMetricComponentServiceGrpc;
 import com.example.metrichub.adapter.driving.grpc.ReactorMetricServiceGrpc;
@@ -19,6 +22,7 @@ import io.grpc.ManagedChannelBuilder;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -46,17 +50,24 @@ public class GRPCMetricAdapter implements MetricPort, Disposable {
         MetricRequest request = MetricRequest.newBuilder()
             .addMetric(toProto(metric))
             .build();
-        return metricStub.ingestMetric(request).then();
+        return metricStub.ingestMetric(request)
+            .doOnError(e -> GrpcErrorHandler.handle(e, Collections.singletonList(metric)))
+            .then();
     }
 
     @Override
     public Mono<Void> sendMetrics(List<Metric> metrics) {
+        if (metrics == null || metrics.isEmpty()) {
+            return Mono.empty();
+        }
         MetricRequest request = MetricRequest.newBuilder()
             .addAllMetric(metrics.stream()
                 .map(this::toProto)
                 .collect(Collectors.toList()))
             .build();
-        return metricStub.ingestMetric(request).then();
+        return metricStub.ingestMetric(request)
+            .doOnError(e -> GrpcErrorHandler.handle(e, metrics))
+            .then();
     }
 
     @Override
@@ -89,7 +100,9 @@ public class GRPCMetricAdapter implements MetricPort, Disposable {
             return Mono.empty();
         }
 
-        return componentStub.addComponentValues(request).then();
+        return componentStub.addComponentValues(request)
+            .doOnError(e -> GrpcErrorHandler.handle(e, Collections.emptyList()))
+            .then();
     }
 
     @Override
@@ -103,16 +116,23 @@ public class GRPCMetricAdapter implements MetricPort, Disposable {
                 .map(this::toProtoComponent)
                 .collect(Collectors.toList()))
             .build();
-        return componentStub.addMetricComponents(request).then();
+        return componentStub.addMetricComponents(request)
+            .doOnError(e -> GrpcErrorHandler.handle(e, Collections.emptyList()))
+            .then();
     }
+
     @Override
     public Mono<Map<String, String>> retrievalUUIDs(List<String> metricsNames) {
+        if (metricsNames == null || metricsNames.isEmpty()) {
+            return Mono.just(Collections.emptyMap());
+        }
         GetMetricIdsByNameRequest request = GetMetricIdsByNameRequest.newBuilder()
             .addAllNames(metricsNames)
             .build();
 
         return metricStub.getMetricIdsByName(request)
-            .map(GetMetricIdsByNameResponse::getMetricIdsMap);
+            .map(GetMetricIdsByNameResponse::getMetricIdsMap)
+            .doOnError(e -> GrpcErrorHandler.handle(e, Collections.emptyList()));
     }
 
     private MetricDTO toProto(Metric metric) {
@@ -147,17 +167,26 @@ public class GRPCMetricAdapter implements MetricPort, Disposable {
         if (comp.getTags() != null) {
             builder.addAllTags(comp.getTags());
         }
+        if (comp.getOperation() != null) {
+            builder.setOperation(protoOperation(comp.getOperation()));
+        }
+        if (comp.getEvaluationOrder() != null) {
+            builder.setEvaluationOrder(comp.getEvaluationOrder());
+        }
         return builder.build();
     }
 
-    private com.example.metrichub.adapter.driving.grpc.ComponentStubDTO toProtoComponentStub(MetricComponent comp) {
-        return com.example.metrichub.adapter.driving.grpc.ComponentStubDTO.newBuilder()
-            .setComponentName(comp.getName())
-            .setTimestamp(com.google.protobuf.Timestamp.newBuilder()
-                .setSeconds(comp.getTimestamp().toEpochSecond())
-                .setNanos(comp.getTimestamp().getNano()))
-            .setValue(comp.getValue() != null ? comp.getValue() : "")
-            .build();
+    private ComponentStubDTO toProtoComponentStub(MetricComponent comp) {
+       ComponentStubDTO.Builder builder =
+            ComponentStubDTO.newBuilder()
+                .setComponentName(comp.getName())
+                .setTimestamp(com.google.protobuf.Timestamp.newBuilder()
+                    .setSeconds(comp.getTimestamp().toEpochSecond())
+                    .setNanos(comp.getTimestamp().getNano()));
+        if (comp.getValue() != null) {
+            builder.setValue(comp.getValue());
+        }
+        return builder.build();
     }
 
     private ProtoMetricType protoType(com.model.MetricType type) {
@@ -166,6 +195,20 @@ public class GRPCMetricAdapter implements MetricPort, Disposable {
             case BOOLEAN: return ProtoMetricType.BOOLEAN;
             case STATE: return ProtoMetricType.STATE;
             default: return ProtoMetricType.NUMERICAL;
+        }
+    }
+
+    private ProtoMetricComponentOperationType protoOperation(com.model.MetricComponentOperationType op) {
+        switch (op) {
+            case NUMERICAL_ADD: return ProtoMetricComponentOperationType.NUMERICAL_ADD;
+            case NUMERICAL_SUBTRACT: return ProtoMetricComponentOperationType.NUMERICAL_SUBTRACT;
+            case NUMERICAL_MULTIPLY: return ProtoMetricComponentOperationType.NUMERICAL_MULTIPLY;
+            case NUMERICAL_DIVIDE: return ProtoMetricComponentOperationType.NUMERICAL_DIVIDE;
+            case NUMERICAL_AVERAGE: return ProtoMetricComponentOperationType.NUMERICAL_AVERAGE;
+            case BOOLEAN_AND: return ProtoMetricComponentOperationType.BOOLEAN_AND;
+            case BOOLEAN_OR: return ProtoMetricComponentOperationType.BOOLEAN_OR;
+            case STATE: return ProtoMetricComponentOperationType.STATE_ALLOW;
+            default: return ProtoMetricComponentOperationType.NUMERICAL_ADD;
         }
     }
 

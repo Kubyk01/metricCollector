@@ -1,53 +1,146 @@
 package com.adapter.secondary.httpmetricingestion;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.model.Metric;
 import com.model.MetricComponent;
 import com.port.secondary.MetricPort;
-import reactor.core.Disposable;
+import com.collector.error.HttpErrorHandler;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-public class HTTPMetricAdapter implements MetricPort, Disposable {
+public class HTTPMetricAdapter implements MetricPort {
+
+    private final String baseUrl;
+    private final ObjectMapper objectMapper;
+
+    private static final String METRICS_PATH = "/metric";
+    private static final String METRICS_NAMES_PATH = "/metric/id";
+    private static final String COMPONENT_METADATA_PATH_TEMPLATE = "/metric/%s/component";
+    private static final String BATCH_COMPONENT_VALUES_PATH = "/metric/component/values/batch";
+
+    public HTTPMetricAdapter() {
+        String base = com.configuration.EnvVarProvider.getBaseUrl();
+        this.baseUrl = base.endsWith("/") ? base.substring(0, base.length() - 1) : base;
+        this.objectMapper = new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+            .setSerializationInclusion(JsonInclude.Include.NON_NULL);
+    }
 
     @Override
     public Mono<Void> sendMetric(Metric metric) {
-        // TODO: use client for HTTP POST
-        return Mono.empty();
+        return sendMetrics(Collections.singletonList(metric));
     }
 
     @Override
     public Mono<Void> sendMetrics(List<Metric> metrics) {
-        // TODO: TODO: use client for batch
-        return Mono.empty();
+        if (metrics == null || metrics.isEmpty()) {
+            return Mono.empty();
+        }
+        return postRequest(METRICS_PATH, metrics)
+            .onErrorResume(e -> {
+                HttpErrorHandler.handle(e, metrics);
+                return Mono.error(e);
+            })
+            .then();
     }
 
     @Override
     public Mono<Void> sendComponentsValues(Map<UUID, List<MetricComponent>> componentsByMetricId) {
-        // TODO: реализовать отправку компонентов через HTTP (например, с группировкой по метрикам)
-        return Mono.empty();
+        if (componentsByMetricId == null || componentsByMetricId.isEmpty()) {
+            return Mono.empty();
+        }
+
+        return postRequest(BATCH_COMPONENT_VALUES_PATH, componentsByMetricId)
+            .onErrorResume(e -> {
+                HttpErrorHandler.handle(e, Collections.emptyList());
+                return Mono.error(e);
+            })
+            .then();
     }
 
     @Override
     public Mono<Void> sendMetricsComponents(UUID metricId, List<MetricComponent> metricComponents) {
-        return MetricPort.super.sendMetricsComponents(metricId, metricComponents);
+        if (metricComponents == null || metricComponents.isEmpty()) {
+            return Mono.empty();
+        }
+        String path = String.format(COMPONENT_METADATA_PATH_TEMPLATE, metricId);
+        return postRequest(path, metricComponents)
+            .onErrorResume(e -> {
+                HttpErrorHandler.handle(e, Collections.emptyList());
+                return Mono.error(e);
+            })
+            .then();
     }
 
     @Override
     public Mono<Map<String, String>> retrievalUUIDs(List<String> metricsNames) {
-        // TODO: реализовать получение UUID
-        return Mono.empty();
+        if (metricsNames == null || metricsNames.isEmpty()) {
+            return Mono.just(Collections.emptyMap());
+        }
+        Map<String, List<String>> body = new HashMap<>();
+        body.put("names", metricsNames);
+        return postRequest(METRICS_NAMES_PATH, body, Map.class)
+            .map(response -> {
+                Object ids = response.get("metric_ids");
+                if (ids instanceof Map) {
+                    return (Map<String, String>) ids;
+                }
+                return Collections.emptyMap();
+            });
     }
 
-    @Override
-    public void dispose() {
-
+    private <T> Mono<Void> postRequest(String path, T body) {
+        return postRequest(path, body, null).then();
     }
 
-    @Override
-    public boolean isDisposed() {
-        return false;
+    private <T, R> Mono<R> postRequest(String path, T body, Class<R> responseClass) {
+        return Mono.fromCallable(() -> {
+            String url = baseUrl + path;
+            String json = objectMapper.writeValueAsString(body);
+
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(30000);
+
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(json.getBytes(StandardCharsets.UTF_8));
+                os.flush();
+            }
+
+            int status = conn.getResponseCode();
+            String responseMessage = conn.getResponseMessage();
+
+            if (status >= 200 && status < 300) {
+                if (responseClass == null) {
+                    return null;
+                }
+                try (java.io.InputStream is = conn.getInputStream()) {
+                    String responseBody = new java.util.Scanner(is, StandardCharsets.UTF_8.name())
+                        .useDelimiter("\\A").next();
+                    return objectMapper.readValue(responseBody, responseClass);
+                }
+            } else {
+                String statusName = responseMessage != null ? responseMessage : "unknown";
+                HttpErrorHandler.handle(status, statusName, Collections.emptyList());
+                throw new RuntimeException("HTTP error " + status + ": " + responseMessage);
+            }
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 }
