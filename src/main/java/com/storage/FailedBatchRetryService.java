@@ -21,21 +21,15 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-
 import java.util.stream.Stream;
 
 public class FailedBatchRetryService {
     private static final ObjectMapper objectMapper = new ObjectMapper()
         .registerModule(new JavaTimeModule());
-    private final MetricCollector client;
     private static final Scheduler RETRY_SCHEDULER = Schedulers.newSingle("metric-retry-scheduler");
     private static final Scheduler FILE_SCHEDULER = Schedulers.newBoundedElastic(2, 10000, "metric-file-scheduler");
     public static final int MAX_BATCH_SIZE = 200_000;
     private static final Logger LOGGER = LoggerFactory.getLogger(FailedBatchRetryService.class.getName());
-
-    public FailedBatchRetryService(MetricCollector client) {
-        this.client = client;
-    }
 
     public void startRetryScheduler(Duration interval) {
         Flux.interval(interval, RETRY_SCHEDULER)
@@ -76,7 +70,7 @@ public class FailedBatchRetryService {
                 return Flux.fromIterable(splitAndPrepareSubBatches(metrics));
             })
             .concatMap(subbatch ->
-                client.sendMetricsRetry(subbatch)
+                MetricCollector.sendMetricsRetry(subbatch)
                     .onErrorResume(err -> {
                         LOGGER.error(err.getMessage());
                         renameFileToFailed(path);
@@ -114,7 +108,7 @@ public class FailedBatchRetryService {
     private static List<List<Metric>> splitBatchBySize(List<Metric> metrics) {
         List<List<Metric>> result = new ArrayList<>();
         List<Metric> currentBatch = new ArrayList<>();
-        short currentSize = 0;
+        int currentSize = 0;
 
         for (Metric metric : metrics) {
             int metricSize = countBatchSize(Collections.singletonList(metric));
@@ -174,4 +168,3 @@ public class FailedBatchRetryService {
         }
     }
 }
-

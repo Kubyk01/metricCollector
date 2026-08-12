@@ -8,6 +8,7 @@ import com.deserializer.MetricStubRunner;
 import com.model.Metric;
 import com.model.MetricComponent;
 import com.port.secondary.MetricPort;
+import com.storage.FailedBatchRetryService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
@@ -23,12 +24,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class MetricCollector {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MetricCollector.class);
-    private static final MetricPort metricPort;
-    private static final Mono<MetricIdCache> cacheMono;
+    private static MetricPort metricPort;
+    private static Mono<MetricIdCache> cacheMono;
 
     private static final int BATCH_SIZE = EnvVarProvider.getBatchSize();
-    private static final Map<UUID, List<MetricComponent>> batchBuffer = new ConcurrentHashMap<>();
-    private static final AtomicBoolean shutdown = new AtomicBoolean(false);
+    private static Map<UUID, List<MetricComponent>> batchBuffer = new ConcurrentHashMap<>();
+    private static AtomicBoolean shutdown = new AtomicBoolean(false);
     private static final Disposable flushDisposable;
 
     static {
@@ -63,6 +64,15 @@ public final class MetricCollector {
             }
             flushAllBatches();
         }));
+
+        Duration retryInterval = EnvVarProvider.getRetryInterval();
+        if (retryInterval != null && !retryInterval.isNegative() && !retryInterval.isZero()) {
+            FailedBatchRetryService retryService = new FailedBatchRetryService();
+            retryService.startRetryScheduler(retryInterval);
+            LOGGER.info("Retry service started with interval: {}", retryInterval);
+        } else {
+            LOGGER.info("Retry service disabled (interval <= 0)");
+        }
     }
 
     public static void submit(Metric metric) {
@@ -131,8 +141,11 @@ public final class MetricCollector {
         }
     }
 
-    // todo
-    public Mono<Void> sendMetricsRetry(List<Metric> metrics) {
-        return null;
+    public static Mono<Void> sendMetricsRetry(List<Metric> metrics) {
+        if (metrics == null || metrics.isEmpty()) {
+            return Mono.empty();
+        }
+        return metricPort.sendMetrics(metrics)
+            .doOnError(e -> LOGGER.error("Failed to send retry batch of {} metrics: {}", metrics.size(), e.getMessage()));
     }
 }

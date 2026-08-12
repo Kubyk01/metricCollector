@@ -17,8 +17,16 @@ import com.example.metrichub.adapter.driving.grpc.ReactorMetricServiceGrpc;
 import com.model.Metric;
 import com.model.MetricComponent;
 import com.port.secondary.MetricPort;
+import io.grpc.CallOptions;
+import io.grpc.Channel;
+import io.grpc.ClientCall;
+import io.grpc.ClientInterceptor;
+import io.grpc.ClientInterceptors;
+import io.grpc.ForwardingClientCall;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.Metadata;
+import io.grpc.MethodDescriptor;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 
@@ -30,19 +38,53 @@ import java.util.stream.Collectors;
 
 public class GRPCMetricAdapter implements MetricPort, Disposable {
 
-    private final ManagedChannel channel;
+    private final Channel channel;
+    private final ManagedChannel managedChannel;
     private final ReactorMetricServiceGrpc.ReactorMetricServiceStub metricStub;
     private final ReactorMetricComponentServiceGrpc.ReactorMetricComponentServiceStub componentStub;
+
+    private static final Metadata.Key<String> AUTHORIZATION_KEY =
+        Metadata.Key.of("Authorization", Metadata.ASCII_STRING_MARSHALLER);
 
     public GRPCMetricAdapter() {
         String baseUrl = com.configuration.EnvVarProvider.getBaseUrl();
         String target = baseUrl.replaceFirst("^https?://", "");
-        this.channel = ManagedChannelBuilder.forTarget(target)
-            // todo make in env ability to use plaintext or TLS/SSL
-            .usePlaintext()
-            .build();
-        this.metricStub = ReactorMetricServiceGrpc.newReactorStub(channel);
-        this.componentStub = ReactorMetricComponentServiceGrpc.newReactorStub(channel);
+
+        ManagedChannelBuilder<?> builder = ManagedChannelBuilder.forTarget(target);
+        boolean usePlaintext = com.configuration.EnvVarProvider.getGrpcUsePlaintext();
+
+        if (usePlaintext) {
+            builder.usePlaintext();
+        }
+        ManagedChannel channelWithoutAuth = builder.build();
+        this.managedChannel = channelWithoutAuth;
+
+        String token = com.configuration.EnvVarProvider.getToken();
+        if (token != null && !token.trim().isEmpty()) {
+            this.channel = ClientInterceptors.intercept(channelWithoutAuth, createAuthInterceptor(token));
+        } else {
+            this.channel = channelWithoutAuth;
+        }
+
+        this.metricStub = ReactorMetricServiceGrpc.newReactorStub(this.channel);
+        this.componentStub = ReactorMetricComponentServiceGrpc.newReactorStub(this.channel);
+    }
+
+    private ClientInterceptor createAuthInterceptor(String token) {
+        return new ClientInterceptor() {
+            @Override
+            public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
+                    MethodDescriptor<ReqT, RespT> method, CallOptions callOptions, Channel next) {
+                ClientCall<ReqT, RespT> call = next.newCall(method, callOptions);
+                return new ForwardingClientCall.SimpleForwardingClientCall<ReqT, RespT>(call) {
+                    @Override
+                    public void start(Listener<RespT> responseListener, Metadata headers) {
+                        headers.put(AUTHORIZATION_KEY, "Bearer " + token);
+                        super.start(responseListener, headers);
+                    }
+                };
+            }
+        };
     }
 
     @Override
@@ -214,11 +256,11 @@ public class GRPCMetricAdapter implements MetricPort, Disposable {
 
     @Override
     public void dispose() {
-        channel.shutdown();
+        managedChannel.shutdown();
     }
 
     @Override
     public boolean isDisposed() {
-        return channel.isShutdown();
+        return managedChannel.isShutdown();
     }
 }

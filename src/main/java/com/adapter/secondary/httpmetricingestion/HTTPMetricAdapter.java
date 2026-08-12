@@ -25,6 +25,7 @@ public class HTTPMetricAdapter implements MetricPort {
 
     private final String baseUrl;
     private final ObjectMapper objectMapper;
+    private final String bearerToken;
 
     private static final String METRICS_PATH = "/metric";
     private static final String METRICS_NAMES_PATH = "/metric/id";
@@ -38,6 +39,9 @@ public class HTTPMetricAdapter implements MetricPort {
             .registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
             .setSerializationInclusion(JsonInclude.Include.NON_NULL);
+
+        String token = com.configuration.EnvVarProvider.getToken();
+        this.bearerToken = (token != null && !token.trim().isEmpty()) ? token : null;
     }
 
     @Override
@@ -115,6 +119,9 @@ public class HTTPMetricAdapter implements MetricPort {
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/json");
+            if (bearerToken != null) {
+                conn.setRequestProperty("Authorization", "Bearer " + bearerToken);
+            }
             conn.setDoOutput(true);
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(30000);
