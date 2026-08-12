@@ -4,7 +4,7 @@
 
   <groupId>io.github.kubyk01</groupId>
   <artifactId>metric-collector-library</artifactId>
-  <version>${metric.collector.library.version}</version>
+  <version>0.1</version>
   <packaging>maven-plugin</packaging>
   <name>Metric Collector Library &amp; Plugin</name>
   <description>Framework-agnostic library for metric collection with build-time instrumentation</description>
@@ -18,10 +18,21 @@
     </license>
   </licenses>
 
+  <scm>
+    <connection>scm:git:git://github.com/Kubyk01/metricCollector.git</connection>
+    <developerConnection>scm:git:ssh://github.com/Kubyk01/metricCollector.git</developerConnection>
+    <url>https://github.com/Kubyk01/metricCollector</url>
+  </scm>
+
+  <developers>
+    <developer>
+      <id>Kubyk01</id>
+    </developer>
+  </developers>
+
   <properties>
     <java.version>8</java.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <metric.collector.library.version>0.1</metric.collector.library.version>
     <slf4j.version>2.0.17</slf4j.version>
     <mockito.version>4.11.0</mockito.version>
     <junit.platform.version>1.9.2</junit.platform.version>
@@ -204,10 +215,25 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-source-plugin</artifactId>
-        <version>3.2.1</version>
+        <version>3.3.1</version>
         <executions>
           <execution>
             <id>attach-sources</id>
+            <goals>
+              <goal>jar-no-fork</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- Javadoc JAR -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>3.7.0</version>
+        <executions>
+          <execution>
+            <id>attach-javadocs</id>
             <goals>
               <goal>jar</goal>
             </goals>
@@ -249,6 +275,32 @@
             <goals>
               <goal>compile</goal>
               <goal>compile-custom</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>org.sonatype.central</groupId>
+        <artifactId>central-publishing-maven-plugin</artifactId>
+        <version>0.9.0</version>
+        <extensions>true</extensions>
+        <configuration>
+          <publishingServerId>central</publishingServerId>
+          <autoPublish>true</autoPublish>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-gpg-plugin</artifactId>
+        <version>3.2.4</version>
+        <executions>
+          <execution>
+            <id>sign-artifacts</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>sign</goal>
             </goals>
           </execution>
         </executions>
