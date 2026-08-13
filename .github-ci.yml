@@ -1,0 +1,87 @@
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '8'
+          cache: 'maven'
+
+      - name: Compile main and test sources
+        run: mvn compile test-compile -B
+
+      - name: Run tests (without recompilation)
+        run: mvn surefire:test -B
+
+      - name: Package JAR (optional, for later deploy)
+        run: mvn package -DskipTests -B
+
+      - name: Upload JARs as artifacts (for deploy job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: maven-artifacts
+          path: |
+            target/*.jar
+            target/*.jar.asc
+            target/*.pom
+            target/*.pom.asc
+            target/*-sources.jar
+            target/*-sources.jar.asc
+            target/*-javadoc.jar
+            target/*-javadoc.jar.asc
+          retention-days: 1
+
+  deploy:
+    name: Deploy to Maven Central
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '8'
+          cache: 'maven'
+
+      - name: Download built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: maven-artifacts
+          path: target/
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          fingerprint: ${{ secrets.GPG_KEY_ID }}
+
+      - name: Deploy to Maven Central (skip tests)
+        run: mvn deploy -DskipTests -B
+        env:
+          MAVEN_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
